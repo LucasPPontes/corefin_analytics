@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  # 1. Banco de Dados PostgreSQL (Data Warehouse 'corefin' com schemas bronze, silver e gold)
+  postgres:
+    image: postgres:16-alpine
+    container_name: corefin_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_password
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # 2. FastAPI Backend & Orquestrador do Pipeline Medalhão (Porta 8001)
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: corefin_backend
+    command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_password
+      POSTGRES_DB: corefin
+      PYTHONDONTWRITEBYTECODE: 1
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 3. Streamlit Web App (Porta 8501 - Dashboard Executivo com st.navigation)
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: corefin_streamlit
+    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_password
+      POSTGRES_DB: corefin
+      FASTAPI_URL: http://backend:8001
+      PYTHONDONTWRITEBYTECODE: 1
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
